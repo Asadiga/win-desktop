@@ -23,7 +23,7 @@ Actions:
 - {"action":"click","x":X,"y":Y}            left click. X,Y are coordinates on the screenshot normalized 0-1000 (0,0 top-left; 1000,1000 bottom-right)
 - {"action":"double_click","x":X,"y":Y}
 - {"action":"right_click","x":X,"y":Y}
-- {"action":"type","text":"..."}            types text (any language) at the focused field; add "enter":true to press Enter after
+- {"action":"type","x":X,"y":Y,"text":"..."}  clicks the field at X,Y first (give them!), then types text (any language); add "enter":true to press Enter after
 - {"action":"key","keys":"ctrl+l"}          key or combo: enter, tab, esc, backspace, ctrl+a, alt+f4, win, pagedown...
 - {"action":"scroll","x":X,"y":Y,"amount":-5} negative = down
 - {"action":"open_url","url":"https://..."}  opens the URL in the default browser (fastest way to reach a website)
@@ -74,6 +74,8 @@ def execute(a, W, H):
         {"click": pyautogui.click, "double_click": pyautogui.doubleClick, "right_click": pyautogui.rightClick}[t](x, y)
         return f"{t} at {x},{y}"
     if t == "type":
+        if "x" in a and "y" in a:
+            x, y = px(a, W, H); pyautogui.click(x, y); time.sleep(0.4)
         pyperclip.copy(str(a.get("text", ""))); time.sleep(0.2); pyautogui.hotkey("ctrl", "v")
         if a.get("enter"): time.sleep(0.3); pyautogui.press("enter")
         return "typed"
