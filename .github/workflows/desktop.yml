@@ -5,6 +5,8 @@ jobs:
   desktop:
     runs-on: windows-latest
     timeout-minutes: 360
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Info
@@ -43,13 +45,23 @@ jobs:
           Start-Sleep 5
           Get-Process pythonw -ErrorAction SilentlyContinue | Select-Object Id,SessionId,MainWindowTitle
       - name: Public link (Cloudflare quick tunnel)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile C:\cf.exe
           Start-Process C:\cf.exe -ArgumentList "tunnel","--no-autoupdate","--url","http://127.0.0.1:6080" -RedirectStandardError C:\cf.log -WindowStyle Hidden
           $url = $null
           for ($i=0; $i -lt 60 -and -not $url; $i++) { Start-Sleep 2; $m = Select-String -Path C:\cf.log -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
           $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
-          Write-Host "DESKTOP LINK: $url/vnc.html?autoconnect=1&resize=scale   RAM: $ram GB"
+          $link = "$url/vnc.html?autoconnect=1&resize=scale"
+          Write-Host "DESKTOP LINK: $link   RAM: $ram GB"
+          Write-Host "::notice title=DESKTOP LINK::$link"
+          $body = @{ message = "link $env:GITHUB_RUN_ID"; content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$link`nrun $env:GITHUB_RUN_ID`nstarted $((Get-Date).ToUniversalTime().ToString('u'))`nram $ram GB`n")); branch = "link" }
+          $h = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
+          $api = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
+          try { Invoke-RestMethod "$api/git/refs/heads/link" -Headers $h | Out-Null } catch { $sha = (Invoke-RestMethod "$api/git/refs/heads/main" -Headers $h).object.sha; Invoke-RestMethod "$api/git/refs" -Method Post -Headers $h -Body (@{ ref = "refs/heads/link"; sha = $sha } | ConvertTo-Json) | Out-Null }
+          try { $body.sha = (Invoke-RestMethod "$api/contents/link.txt?ref=link" -Headers $h).sha } catch {}
+          Invoke-RestMethod "$api/contents/link.txt" -Method Put -Headers $h -Body ($body | ConvertTo-Json) | Out-Null
       - name: Keep alive
         run: |
           while ($true) { Write-Host "alive $(Get-Date)"; Start-Sleep 300 }
