@@ -5,17 +5,13 @@ jobs:
   desktop:
     runs-on: windows-latest
     timeout-minutes: 360
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Info
+      - name: Screen
         run: |
-          whoami
-          "session: " + [System.Diagnostics.Process]::GetCurrentProcess().SessionId
-          query user
-          Get-CimInstance Win32_VideoController | Select-Object Name,CurrentHorizontalResolution,CurrentVerticalResolution | Format-List
-          python --version
+          try { Set-DisplayResolution -Width 1366 -Height 768 -Force } catch { Write-Host "resolution: $_" }
+          Get-CimInstance Win32_VideoController | Select-Object CurrentHorizontalResolution,CurrentVerticalResolution | Format-List
+          "RAM GB: " + [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
       - name: VNC server (TightVNC)
         run: |
           $pw = "${{ secrets.VNC_PASSWORD }}"
@@ -27,8 +23,9 @@ jobs:
         run: |
           python -m pip install -q websockify
           git clone -q --depth 1 https://github.com/novnc/noVNC.git C:\novnc
+          Copy-Item C:\novnc\vnc.html C:\novnc\index.html
           Start-Process python -ArgumentList "-m","websockify","--web","C:\novnc","6080","127.0.0.1:5900" -WindowStyle Hidden
-      - name: AI agent (وكيل الكمبيوتر)
+      - name: AI agent
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -42,26 +39,30 @@ jobs:
             $s = $ws.CreateShortcut("$d\AI Agent.lnk"); $s.TargetPath = $pyw; $s.Arguments = "C:\agent\agent.py"; $s.WorkingDirectory = "C:\agent"; $s.Save()
           }
           Start-Process $pyw -ArgumentList "C:\agent\agent.py" -WorkingDirectory C:\agent
-          Start-Sleep 5
-          Get-Process pythonw -ErrorAction SilentlyContinue | Select-Object Id,SessionId,MainWindowTitle
-      - name: Public link (Cloudflare quick tunnel)
+      - name: Desktop link + keep alive
         env:
-          GH_TOKEN: ${{ github.token }}
+          LINK_TOKEN: ${{ secrets.LINK_TOKEN }}
+          LINK_REPO: ${{ secrets.LINK_REPO }}
         run: |
           Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile C:\cf.exe
-          Start-Process C:\cf.exe -ArgumentList "tunnel","--no-autoupdate","--url","http://127.0.0.1:6080" -RedirectStandardError C:\cf.log -WindowStyle Hidden
-          $url = $null
-          for ($i=0; $i -lt 60 -and -not $url; $i++) { Start-Sleep 2; $m = Select-String -Path C:\cf.log -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
-          $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
-          $link = "$url/vnc.html?autoconnect=1&resize=scale"
-          Write-Host "DESKTOP LINK: $link   RAM: $ram GB"
-          Write-Host "::notice title=DESKTOP LINK::$link"
-          $body = @{ message = "link $env:GITHUB_RUN_ID"; content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$link`nrun $env:GITHUB_RUN_ID`nstarted $((Get-Date).ToUniversalTime().ToString('u'))`nram $ram GB`n")); branch = "link" }
-          $h = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
-          $api = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
-          try { Invoke-RestMethod "$api/git/refs/heads/link" -Headers $h | Out-Null } catch { $sha = (Invoke-RestMethod "$api/git/refs/heads/main" -Headers $h).object.sha; Invoke-RestMethod "$api/git/refs" -Method Post -Headers $h -Body (@{ ref = "refs/heads/link"; sha = $sha } | ConvertTo-Json) | Out-Null }
-          try { $body.sha = (Invoke-RestMethod "$api/contents/link.txt?ref=link" -Headers $h).sha } catch {}
-          Invoke-RestMethod "$api/contents/link.txt" -Method Put -Headers $h -Body ($body | ConvertTo-Json) | Out-Null
-      - name: Keep alive
-        run: |
-          while ($true) { Write-Host "alive $(Get-Date)"; Start-Sleep 300 }
+          $h = @{ Authorization = "Bearer $env:LINK_TOKEN"; Accept = "application/vnd.github+json" }
+          $api = "https://api.github.com/repos/$env:LINK_REPO/contents/link.txt"
+          function Start-Tunnel {
+            Remove-Item C:\cf.log -ErrorAction SilentlyContinue
+            Start-Process C:\cf.exe -ArgumentList "tunnel","--no-autoupdate","--logfile","C:\cf.log","--url","http://127.0.0.1:6080" -WindowStyle Hidden
+            $url = $null
+            for ($i=0; $i -lt 90 -and -not $url; $i++) { Start-Sleep 2; $m = Select-String -Path C:\cf.log -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
+            $link = "$url/vnc.html?autoconnect=1&resize=scale"
+            $txt = "$link`nrun $env:GITHUB_RUN_ID`nstarted $((Get-Date).ToUniversalTime().ToString('u'))`n"
+            $body = @{ message = "link"; content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($txt)) }
+            try { $body.sha = (Invoke-RestMethod $api -Headers $h).sha } catch {}
+            try { Invoke-RestMethod $api -Method Put -Headers $h -Body ($body | ConvertTo-Json) | Out-Null; Write-Host "link published" } catch { Write-Host "publish failed: $_" }
+          }
+          Start-Tunnel
+          $n = 0
+          while ($true) {
+            Start-Sleep 60; $n++
+            if (-not (Get-Process cf -ErrorAction SilentlyContinue)) { Write-Host "tunnel died, restarting"; Start-Tunnel }
+            if (-not (Get-Process pythonw -ErrorAction SilentlyContinue) -and -not (Test-Path C:\agent\closed)) { }
+            if ($n % 5 -eq 0) { Write-Host "alive $(Get-Date)" }
+          }
