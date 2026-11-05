@@ -89,6 +89,19 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
+      - name: Publish address for Tab
+        continue-on-error: true
+        env:
+          LINK_TOKEN: ${{ secrets.LINK_TOKEN }}
+          LINK_REPO: ${{ secrets.LINK_REPO }}
+        run: |
+          $h = @{ Authorization = "Bearer $env:LINK_TOKEN"; Accept = "application/vnd.github+json" }
+          $api = "https://api.github.com/repos/$env:LINK_REPO/contents/rdp.txt"
+          $txt = "ip $env:TAILSCALE_IP`nuser RDP`nrun $env:GITHUB_RUN_ID`nstarted $((Get-Date).ToUniversalTime().ToString('u'))`n"
+          $body = @{ message = "rdp"; content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($txt)) }
+          try { $body.sha = (Invoke-RestMethod $api -Headers $h).sha } catch {}
+          Invoke-RestMethod $api -Method Put -Headers $h -Body ($body | ConvertTo-Json) | Out-Null
+
       - name: AI Agent (Gemini)
         continue-on-error: true
         env:
