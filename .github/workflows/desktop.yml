@@ -1,0 +1,55 @@
+name: Windows Desktop
+on:
+  workflow_dispatch:
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Info
+        run: |
+          whoami
+          "session: " + [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          query user
+          Get-CimInstance Win32_VideoController | Select-Object Name,CurrentHorizontalResolution,CurrentVerticalResolution | Format-List
+          python --version
+      - name: VNC server (TightVNC)
+        run: |
+          $pw = "${{ secrets.VNC_PASSWORD }}"
+          Invoke-WebRequest "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" -OutFile "$env:TEMP\tvnc.msi"
+          Start-Process msiexec.exe -Wait -ArgumentList "/i","$env:TEMP\tvnc.msi","/quiet","/norestart","ADDLOCAL=Server","SERVER_REGISTER_AS_SERVICE=1","SERVER_ADD_FIREWALL_EXCEPTION=1","SET_USEVNCAUTHENTICATION=1","VALUE_OF_USEVNCAUTHENTICATION=1","SET_PASSWORD=1","VALUE_OF_PASSWORD=$pw","SET_ALLOWLOOPBACK=1","VALUE_OF_ALLOWLOOPBACK=1","SET_ACCEPTHTTPCONNECTIONS=1","VALUE_OF_ACCEPTHTTPCONNECTIONS=0"
+          Start-Sleep 5
+          Get-Service tvnserver
+      - name: noVNC web client
+        run: |
+          python -m pip install -q websockify
+          git clone -q --depth 1 https://github.com/novnc/noVNC.git C:\novnc
+          Start-Process python -ArgumentList "-m","websockify","--web","C:\novnc","6080","127.0.0.1:5900" -WindowStyle Hidden
+      - name: AI agent (وكيل الكمبيوتر)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -m pip install -q pyautogui pyperclip pillow requests
+          New-Item -ItemType Directory -Force C:\agent | Out-Null
+          Copy-Item agent.py C:\agent\agent.py
+          Set-Content -Path C:\agent\key.txt -Value $env:GEMINI_API_KEY -NoNewline
+          $pyw = (Get-Command python).Source -replace 'python\.exe$','pythonw.exe'
+          $ws = New-Object -ComObject WScript.Shell
+          foreach ($d in @([Environment]::GetFolderPath("Desktop"), "C:\Users\Public\Desktop")) {
+            $s = $ws.CreateShortcut("$d\AI Agent.lnk"); $s.TargetPath = $pyw; $s.Arguments = "C:\agent\agent.py"; $s.WorkingDirectory = "C:\agent"; $s.Save()
+          }
+          Start-Process $pyw -ArgumentList "C:\agent\agent.py" -WorkingDirectory C:\agent
+          Start-Sleep 5
+          Get-Process pythonw -ErrorAction SilentlyContinue | Select-Object Id,SessionId,MainWindowTitle
+      - name: Public link (Cloudflare quick tunnel)
+        run: |
+          Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile C:\cf.exe
+          Start-Process C:\cf.exe -ArgumentList "tunnel","--no-autoupdate","--url","http://127.0.0.1:6080" -RedirectStandardError C:\cf.log -WindowStyle Hidden
+          $url = $null
+          for ($i=0; $i -lt 60 -and -not $url; $i++) { Start-Sleep 2; $m = Select-String -Path C:\cf.log -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
+          $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
+          Write-Host "DESKTOP LINK: $url/vnc.html?autoconnect=1&resize=scale   RAM: $ram GB"
+      - name: Keep alive
+        run: |
+          while ($true) { Write-Host "alive $(Get-Date)"; Start-Sleep 300 }
